@@ -1,9 +1,11 @@
 from pyspark.sql.functions import col, trim, to_timestamp, to_date, year, month, dayofmonth, when, regexp_replace, count
+from pyspark.sql import functions as F
 
-df_raw = spark.table("bronze_queimadas_csv_raw")
+df_raw = spark.table("INPE.bronze.focos_raw")
 
 df_silver = (
     df_raw
+    .dropDuplicates(["id"])
     .withColumn("id", trim(col("id")))
     .withColumn("lat", trim(col("lat")).cast("double"))
     .withColumn("lon", trim(col("lon")).cast("double"))
@@ -33,9 +35,17 @@ df_silver = (
         .when((col("risco_fogo") >= 0.5) & (col("frp") >= 50), "media")
         .otherwise("baixa")
     )
+    .withColumn("data_ref", F.to_date("data_hora_gmt"))
+    .withColumn(
+        "classe_risco",
+        F.when(F.col("risco_fogo") >= 0.8, "ALTO")
+         .when(F.col("risco_fogo") >= 0.4, "MEDIO")
+         .otherwise("BAIXO")
+    )
+    .filter(F.col("lat").isNotNull() & F.col("lon").isNotNull())    
 )
 
-df_silver.write.mode("overwrite").saveAsTable("silver_queimadas_focos")
+df_silver.write.mode("append").saveAsTable("INPE.silver.queimadas_focos")
 
 df_quality = df_silver.select(
     count(when(col("id").isNull(), 1)).alias("id_nulo"),

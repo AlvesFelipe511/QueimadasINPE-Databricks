@@ -1,14 +1,15 @@
 from pyspark.sql.functions import count, avg, max as spark_max
 
-mysql_host = "<mysql_fqdn>"
+mysql_host = "<colocar aqui o host>"
 mysql_port = "3306"
 mysql_db = "queimadas"
-mysql_user = "queimada-usr"
-mysql_password = dbutils.secrets.get("queimadas-scope", "mysql-app-password")
+mysql_user = "<colocar aqui o user>"
+mysql_password = "<colocar aqui a senha>"
+#mysql_password = dbutils.secrets.get("queimadas-scope", "mysql-app-password")
 
 jdbc_url = f"jdbc:mysql://{mysql_host}:{mysql_port}/{mysql_db}?useSSL=true&requireSSL=true"
 
-df_silver = spark.table("silver_queimadas_focos")
+df_silver = spark.table("INPE.silver.queimadas_focos")
 
 gold_estado_dia = (
     df_silver.groupBy("data", "estado")
@@ -44,12 +45,15 @@ for df_out, table_name in [
 ]:
     (
         df_out.write
-        .format("jdbc")
-        .option("url", jdbc_url)
+        .format("mysql")
+        .option("host", mysql_host)
+        .option("port", mysql_port)
+        .option("database", mysql_db)
         .option("dbtable", table_name)
         .option("user", mysql_user)
         .option("password", mysql_password)
-        .option("driver", "com.mysql.cj.jdbc.Driver")
+        .option("useSSL", "true")
+        .option("requireSSL", "true")
         .mode("overwrite")
         .save()
     )
