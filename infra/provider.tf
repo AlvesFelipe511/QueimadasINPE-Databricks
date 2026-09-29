@@ -19,7 +19,3 @@ terraform {
     key                   = "monitor-queimadas.tfstate"
   }
 }
-
-provider "azurerm" {
-  features {}
-}
