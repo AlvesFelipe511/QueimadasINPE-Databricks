@@ -1,0 +1,94 @@
+name: provision-mysql-queimadas
+
+on:
+  workflow_dispatch:
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: infra
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        env:
+          TF_VAR_mysql_admin_password: ${{ secrets.TF_VAR_mysql_ADMIN_PASSWORD }}
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        env:
+          TF_VAR_mysql_admin_password: ${{ secrets.TF_VAR_mysql_ADMIN_PASSWORD }}
+        run: terraform apply -auto-approve tfplan
+
+      - name: Export Terraform outputs
+        run: |
+          echo "MYSQL_FQDN=$(terraform output -raw mysql_fqdn)" >> $GITHUB_ENV
+          echo "MYSQL_DB=$(terraform output -raw database_name)" >> $GITHUB_ENV
+          echo "MYSQL_ADMIN=$(terraform output -raw mysql_admin_username)" >> $GITHUB_ENV
+          echo "MYSQL_SERVER=$(terraform output -raw mysql_server_name)" >> $GITHUB_ENV
+          echo "RESOURCE_GROUP=$(terraform output -raw resource_group_name)" >> $GITHUB_ENV
+
+      - name: Get runner public IP
+        run: |
+          echo "RUNNER_IP=$(curl -s https://api.ipify.org)" >> $GITHUB_ENV
+
+      - name: Open temporary firewall rule for runner
+        run: |
+          az mysql flexible-server firewall-rule create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$MYSQL_SERVER" \
+            --rule-name "github-runner-temp" \
+            --start-ip-address "$RUNNER_IP" \
+            --end-ip-address "$RUNNER_IP"
+
+      - name: Install mysql client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+
+      - name: Create application user and grant privileges
+        env:
+          MYSQL_ADMIN_PASSWORD: ${{ secrets.TF_VAR_mysql_ADMIN_PASSWORD }}
+          MYSQL_APP_PASSWORD: ${{ secrets.MYSQL_APP_PASSWORD }}
+        run: |
+          mysql \
+            --host="$MYSQL_FQDN" \
+            --user="$MYSQL_ADMIN" \
+            --password="$MYSQL_ADMIN_PASSWORD" \
+            --ssl-mode=REQUIRED \
+            -e "
+              CREATE USER IF NOT EXISTS 'queimada-usr'@'%' IDENTIFIED BY '${MYSQL_APP_PASSWORD}';
+              GRANT ALL PRIVILEGES ON ${MYSQL_DB}.* TO 'queimada-usr'@'%';
+              FLUSH PRIVILEGES;
+            "
+
+      - name: Close temporary firewall rule
+        if: always()
+        run: |
+          az mysql flexible-server firewall-rule delete \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$MYSQL_SERVER" \
+            --rule-name "github-runner-temp" \
+            --yes
